@@ -26,8 +26,8 @@ const quitTipEl = document.getElementById('quit-tip');
 if (quitTipEl) {
   // Mac has ⌘Q, Windows/Linux don't have a universal quit shortcut
   quitTipEl.textContent = isMac 
-    ? 'Fully quit Chrome (⌘Q) and reopen' 
-    : 'Fully quit Chrome (menu → Exit) and reopen';
+    ? 'Fully quit the supported browser (⌘Q) and reopen' 
+    : 'Fully quit the supported browser (menu → Exit) and reopen';
 }
 
 // Copy functionality
@@ -105,65 +105,33 @@ function setChecking() {
   troubleSection.style.display = 'none';
 }
 
-// Check connection using PING/PONG
-function checkConnection() {
+// Check connection through the background service worker.
+// Opening a second native port from the popup would spawn a second host process.
+async function checkConnection() {
   setChecking();
-  
-  let resolved = false;
-  let port = null;
-  
-  const cleanup = () => {
-    try { if (port) port.disconnect(); } catch {}
-  };
-  
-  const timeout = setTimeout(() => {
-    if (!resolved) {
-      resolved = true;
-      cleanup();
-      setTrouble('Timeout - native host not responding');
-    }
-  }, 3000);
-  
+
   try {
-    port = chrome.runtime.connectNative('com.pi.annotate');
-    
-    port.onDisconnect.addListener(() => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      
-      const error = chrome.runtime.lastError?.message || '';
-      if (error.includes('not found')) {
-        setNotInstalled('Native host not found');
-      } else if (error.includes('forbidden')) {
-        setNotInstalled('Extension ID mismatch - reinstall native host');
-      } else if (error) {
-        setTrouble(error);
-      } else {
-        // Disconnected without error but no PONG received - host may have crashed
-        setTrouble('Native host disconnected unexpectedly');
-      }
-    });
-    
-    port.onMessage.addListener((msg) => {
-      if (msg?.type === 'PONG') {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timeout);
-        setConnected();
-        cleanup();
-      }
-    });
-    
-    // Send PING
-    port.postMessage({ type: 'PING' });
-    
+    const result = await chrome.runtime.sendMessage({ type: 'CHECK_CONNECTION' });
+    const error = result?.error || '';
+
+    if (result?.connected) {
+      setConnected();
+      return;
+    }
+
+    if (error.includes('not found')) {
+      setNotInstalled('Native host not found');
+      return;
+    }
+
+    if (error.includes('forbidden')) {
+      setNotInstalled('Extension ID mismatch - reinstall native host');
+      return;
+    }
+
+    setTrouble(error || 'Native host disconnected unexpectedly');
   } catch (err) {
-    if (resolved) return;
-    resolved = true;
-    clearTimeout(timeout);
-    cleanup();
-    setTrouble(err.message);
+    setTrouble(err instanceof Error ? err.message : String(err));
   }
 }
 

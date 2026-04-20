@@ -41,14 +41,24 @@ chmod +x "$HOST_PATH"
 chmod +x "$HOST_SCRIPT"
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+  MANIFEST_DIRS=(
+    "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+    "$HOME/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts"
+    "$HOME/Library/Application Support/Chromium/NativeMessagingHosts"
+  )
 else
-  MANIFEST_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+  CONFIG_HOME="${CHROME_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+  MANIFEST_DIRS=(
+    "$CONFIG_HOME/google-chrome/NativeMessagingHosts"
+    "$CONFIG_HOME/google-chrome-for-testing/NativeMessagingHosts"
+    "$CONFIG_HOME/chromium/NativeMessagingHosts"
+  )
 fi
 
-mkdir -p "$MANIFEST_DIR"
+for MANIFEST_DIR in "${MANIFEST_DIRS[@]}"; do
+  mkdir -p "$MANIFEST_DIR"
 
-cat > "$MANIFEST_DIR/com.pi.annotate.json" << EOF
+  cat > "$MANIFEST_DIR/com.pi.annotate.json" << EOF
 {
   "name": "com.pi.annotate",
   "description": "Pi Annotate native messaging host",
@@ -60,5 +70,7 @@ cat > "$MANIFEST_DIR/com.pi.annotate.json" << EOF
 }
 EOF
 
-echo "Installed native host manifest to: $MANIFEST_DIR/com.pi.annotate.json"
-echo "Restart Chrome for changes to take effect."
+  echo "Installed native host manifest to: $MANIFEST_DIR/com.pi.annotate.json"
+done
+
+echo "Fully quit and reopen the browser you loaded the extension in."

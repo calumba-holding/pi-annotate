@@ -6,6 +6,8 @@
  */
 
 let nativePort = null;
+let pendingPing = null;
+let lastNativeDisconnectError = "";
 const requestTabs = new Map();
 
 function getRequestId(msg) {
@@ -15,6 +17,52 @@ function getRequestId(msg) {
 function isRestrictedUrl(url) {
   if (!url) return true;
   return /^(chrome|chrome-extension|edge|about|devtools|view-source):/.test(url);
+}
+
+function resolvePendingPing(result) {
+  if (!pendingPing) return;
+  clearTimeout(pendingPing.timeoutId);
+  pendingPing.resolve(result);
+  pendingPing = null;
+}
+
+function pingNative() {
+  if (!nativePort) {
+    return Promise.resolve({
+      connected: false,
+      error: lastNativeDisconnectError || "Native host not connected",
+    });
+  }
+
+  if (pendingPing) {
+    return pendingPing.promise;
+  }
+
+  let resolvePing;
+  const promise = new Promise((resolve) => {
+    resolvePing = resolve;
+  });
+
+  const timeoutId = setTimeout(() => {
+    if (!pendingPing || pendingPing.promise !== promise) return;
+    pendingPing = null;
+    resolvePing({ connected: false, error: "Timeout - native host not responding" });
+  }, 3000);
+
+  pendingPing = { promise, resolve: resolvePing, timeoutId };
+
+  try {
+    nativePort.postMessage({ type: "PING" });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    pendingPing = null;
+    resolvePing({
+      connected: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return promise;
 }
 
 function sendToNative(msg) {
@@ -93,10 +141,19 @@ async function togglePicker() {
 }
 
 function connectNative() {
+  if (nativePort) return;
+
   console.log("[pi-annotate] Connecting to native host...");
-  nativePort = chrome.runtime.connectNative("com.pi.annotate");
+  const port = chrome.runtime.connectNative("com.pi.annotate");
+  nativePort = port;
   
-  nativePort.onMessage.addListener((msg) => {
+  port.onMessage.addListener((msg) => {
+    if (msg?.type === "PONG") {
+      lastNativeDisconnectError = "";
+      resolvePendingPing({ connected: true });
+      return;
+    }
+
     console.log("[pi-annotate] From native host:", msg);
     
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -154,9 +211,14 @@ function connectNative() {
     });
   });
   
-  nativePort.onDisconnect.addListener(() => {
-    console.log("[pi-annotate] Native host disconnected");
-    nativePort = null;
+  port.onDisconnect.addListener(() => {
+    const error = chrome.runtime.lastError?.message || "Native host disconnected unexpectedly";
+    console.log("[pi-annotate] Native host disconnected", error);
+    lastNativeDisconnectError = error;
+    resolvePendingPing({ connected: false, error });
+    if (nativePort === port) {
+      nativePort = null;
+    }
     setTimeout(connectNative, 2000);
   });
 }
@@ -165,6 +227,11 @@ function connectNative() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   console.log("[pi-annotate] Message:", msg.type);
   
+  if (msg.type === "CHECK_CONNECTION") {
+    pingNative().then(sendResponse);
+    return true;
+  }
+
   if (msg.type === "TOGGLE_PICKER") {
     togglePicker();
     return;

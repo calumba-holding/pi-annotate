@@ -11,14 +11,21 @@ const TOKEN_PATH = "/tmp/pi-annotate.token";
 const MAX_SOCKET_BUFFER = 32 * 1024 * 1024; // 32MB (increased from 8MB for edit capture payloads)
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024; // 15MB
 
+type AnnotationContext = {
+  hasUI?: boolean;
+  ui?: {
+    notify?: (message: string, level: "info" | "error") => void;
+    setStatus?: (source: string, message: string) => void;
+  };
+};
+
 export default function (pi: ExtensionAPI) {
   let browserSocket: net.Socket | null = null;
   const pendingRequests = new Map<number, (result: AnnotationResult) => void | Promise<void>>();
   let dataBuffer = ""; // Buffer for incomplete JSON messages
   let authToken: string | null = null;
-  let currentCtx: any = null; // Store current context for status updates
+  let currentCtx: AnnotationContext | null = null;
   
-  // Status helper that uses ctx.ui.setStatus when available
   function setStatus(message: string) {
     if (currentCtx?.ui?.setStatus) {
       currentCtx.ui.setStatus("pi-annotate", message);
@@ -29,18 +36,18 @@ export default function (pi: ExtensionAPI) {
   // /annotate Command
   // ─────────────────────────────────────────────────────────────────────
   
-  const annotateHandler = async (args: string, ctx: any) => {
-    currentCtx = ctx; // Store for status updates
+  const annotateHandler = async (args: string, ctx: AnnotationContext) => {
+    currentCtx = ctx;
     const url = args.trim() || undefined;
     
     try {
       await connectToHost();
     } catch (err) {
-      ctx.ui?.notify("Chrome extension not connected. Click the Pi Annotate icon in Chrome to wake the service worker, then retry.", "error");
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.ui?.notify(`Browser extension not connected. ${message}. Click the Pi Annotate icon in the browser to wake the service worker, then retry.`, "error");
       return;
     }
     
-    // Send start message (no URL = use current tab)
     const requestId = Date.now();
     sendToHost({
       type: "START_ANNOTATION",
@@ -48,11 +55,11 @@ export default function (pi: ExtensionAPI) {
       url,
     });
     
-    ctx.ui?.notify(url ? `Opening annotation mode on ${url}` : "Annotation mode started on current tab", "info");
+    ctx.ui?.notify(url ? `Opening annotation mode on ${url}` : "Annotation mode started on current browser tab", "info");
   };
 
   pi.registerCommand("annotate", {
-    description: "Start visual annotation mode in Chrome. Optionally provide a URL.",
+    description: "Start visual annotation mode in the browser. Optionally provide a URL.",
     handler: annotateHandler,
   });
   
@@ -70,7 +77,8 @@ export default function (pi: ExtensionAPI) {
       try {
         authToken = fs.readFileSync(TOKEN_PATH, "utf8").trim();
       } catch (err) {
-        reject(new Error("Missing auth token; is the native host running?"));
+        const message = err instanceof Error ? err.message : String(err);
+        reject(new Error(`Failed to read auth token at ${TOKEN_PATH}: ${message}`, { cause: err }));
         return;
       }
 
@@ -101,8 +109,9 @@ export default function (pi: ExtensionAPI) {
           try {
             const msg = JSON.parse(line);
             void handleMessage(msg);
-          } catch (e) {
-            setStatus("Error: Failed to parse message");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            setStatus(`Error: Failed to parse message: ${message}`);
           }
         }
       });
@@ -148,7 +157,7 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
-  async function handleMessage(msg: any) {
+  async function handleMessage(msg: unknown) {
     if (!isRecord(msg) || typeof msg.type !== "string") return;
     
     setStatus(`Received: ${msg.type}`);
@@ -183,24 +192,26 @@ export default function (pi: ExtensionAPI) {
       if (!isAnnotationResult(msg.result)) return;
       if (requestId && pendingRequests.has(requestId)) {
         // Tool flow - resolve the promise
-        const resolvePending = pendingRequests.get(requestId) as (r: AnnotationResult) => void | Promise<void>;
+        const resolvePending = pendingRequests.get(requestId);
+        if (!resolvePending) return;
         pendingRequests.delete(requestId);
         await resolvePending(msg.result);
       } else {
         // Command flow - inject as user message
-        const result = msg.result as AnnotationResult;
+        const result = msg.result;
         const text = await formatResult(result);
         setStatus("Annotation complete");
         pi.sendUserMessage(text);
       }
     } else if (msg.type === "CANCEL") {
       if (requestId && pendingRequests.has(requestId)) {
-        const resolvePending = pendingRequests.get(requestId) as (r: AnnotationResult) => void | Promise<void>;
+        const resolvePending = pendingRequests.get(requestId);
+        if (!resolvePending) return;
         pendingRequests.delete(requestId);
         await resolvePending({
           success: false,
           cancelled: true,
-          reason: msg.reason || "user",
+          reason: typeof msg.reason === "string" ? msg.reason : "user",
           elements: [],
           url: "",
           viewport: { width: 0, height: 0 },
@@ -422,7 +433,8 @@ export default function (pi: ExtensionAPI) {
           await fs.promises.writeFile(screenshotPath, buffer);
           output += `- Element ${safeIndex}: ${screenshotPath}\n`;
         } catch (err) {
-          output += `- Element ${shot?.index ?? i + 1}: *capture failed*\n`;
+          const message = err instanceof Error ? err.message : String(err);
+          output += `- Element ${shot?.index ?? i + 1}: *capture failed (${message})*\n`;
         }
       }
       output += "\n";
@@ -440,21 +452,25 @@ export default function (pi: ExtensionAPI) {
           try {
             const p = path.join(os.tmpdir(), `pi-annotate-${timestamp}-before.png`);
             const buf = Buffer.from(ec.beforeScreenshot.replace(/^data:image\/\w+;base64,/, ""), "base64");
-            if (buf.length <= MAX_SCREENSHOT_BYTES) {
-              await fs.promises.writeFile(p, buf);
-              output += `- Before: ${p}\n`;
-            }
-          } catch {}
+            if (buf.length > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot too large");
+            await fs.promises.writeFile(p, buf);
+            output += `- Before: ${p}\n`;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            output += `- Before: *capture failed (${message})*\n`;
+          }
         }
         if (ec.afterScreenshot) {
           try {
             const p = path.join(os.tmpdir(), `pi-annotate-${timestamp}-after.png`);
             const buf = Buffer.from(ec.afterScreenshot.replace(/^data:image\/\w+;base64,/, ""), "base64");
-            if (buf.length <= MAX_SCREENSHOT_BYTES) {
-              await fs.promises.writeFile(p, buf);
-              output += `- After: ${p}\n`;
-            }
-          } catch {}
+            if (buf.length > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot too large");
+            await fs.promises.writeFile(p, buf);
+            output += `- After: ${p}\n`;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            output += `- After: *capture failed (${message})*\n`;
+          }
         }
         output += "\n";
       }
@@ -471,15 +487,15 @@ export default function (pi: ExtensionAPI) {
     name: "annotate",
     label: "Annotate",
     description:
-      "Open visual annotation mode in Chrome so the user can click/select elements and add comments. " +
+      "Open visual annotation mode in the browser so the user can click/select elements and add comments. " +
       "Only use when the user explicitly asks to annotate, visually point something out, or show you UI issues. " +
       "Returns structured annotations with CSS selectors and element info. " +
-      "If no URL is provided, uses the current active Chrome tab.",
+      "If no URL is provided, uses the current active browser tab.",
     promptSnippet:
       "Use only when the user explicitly asks for visual annotation or UI pointing. Call with {url?} and return selected element annotations.",
     parameters: Type.Object({
       url: Type.Optional(Type.String({
-        description: "URL to annotate. If omitted, uses current Chrome tab.",
+        description: "URL to annotate. If omitted, uses the current browser tab.",
       })),
       timeout: Type.Optional(Type.Number({
         description: "Max seconds to wait for annotations. Default: 300 (5 min)",
@@ -487,7 +503,7 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      currentCtx = ctx; // Store for status updates
+      currentCtx = ctx;
       const { url, timeout = 300 } = params as { url?: string; timeout?: number };
       const requestId = Date.now();
 
@@ -495,9 +511,10 @@ export default function (pi: ExtensionAPI) {
       try {
         await connectToHost();
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         return {
-          content: [{ type: "text", text: "Chrome extension not connected. Click the Pi Annotate icon in Chrome to wake the service worker, then retry." }],
-          details: { error: "Connection failed" },
+          content: [{ type: "text", text: "Browser extension not connected. Click the Pi Annotate icon in the browser to wake the service worker, then retry." }],
+          details: { error: message },
         };
       }
 
@@ -555,7 +572,7 @@ export default function (pi: ExtensionAPI) {
         });
         
         if (ctx.hasUI) {
-          ctx.ui.notify("Annotation mode started in Chrome", "info");
+          ctx.ui.notify("Annotation mode started in the browser", "info");
         }
       });
     },

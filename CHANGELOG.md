@@ -2,6 +2,14 @@
 
 All notable changes to Pi Annotate.
 
+## [0.4.2] - 2026-04-20
+
+### Fixed
+- Native host install now writes manifests for Chromium and Google Chrome for Testing in addition to Google Chrome, fixing immediate native-host disconnects in Chromium.
+- Popup connection checks now reuse the background service worker's native host connection instead of spawning a second host process that could disrupt the shared socket.
+- Browser-facing setup and troubleshooting copy now matches the supported browser matrix and Linux config-home behavior.
+- Native host filesystem cleanup and annotation screenshot reporting now preserve useful error information instead of silently swallowing failures.
+
 ## [0.4.1] - 2026-04-04
 
 ### Changed

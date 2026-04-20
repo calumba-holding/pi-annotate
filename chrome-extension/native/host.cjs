@@ -11,13 +11,22 @@ const MAX_LOG_BYTES = 5 * 1024 * 1024; // 5MB
 
 process.umask(0o077);
 
+function reportFsError(action, err) {
+  const code = err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "";
+  if (code === "ENOENT") return;
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`${new Date().toISOString()} ${action}: ${message}`);
+}
+
 function rotateLogIfNeeded() {
   try {
     const stats = fs.statSync(LOG_FILE);
     if (stats.size > MAX_LOG_BYTES) {
       fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
     }
-  } catch {}
+  } catch (err) {
+    reportFsError(`Failed to rotate log ${LOG_FILE}`, err);
+  }
 }
 
 const log = (msg) => {
@@ -28,7 +37,11 @@ const log = (msg) => {
 log("Host starting...");
 
 // Clean up old socket
-try { fs.unlinkSync(SOCKET_PATH); } catch {}
+try {
+  fs.unlinkSync(SOCKET_PATH);
+} catch (err) {
+  reportFsError(`Failed to remove old socket ${SOCKET_PATH}`, err);
+}
 
 // Store connected pi client
 let piSocket = null;
@@ -120,8 +133,18 @@ process.stdin.on("end", () => {
 });
 
 function cleanup() {
-  try { fs.unlinkSync(SOCKET_PATH); } catch {}
-  try { fs.unlinkSync(TOKEN_PATH); } catch {}
+  try {
+    fs.unlinkSync(SOCKET_PATH);
+  } catch (err) {
+    reportFsError(`Failed to remove socket ${SOCKET_PATH}`, err);
+  }
+
+  try {
+    fs.unlinkSync(TOKEN_PATH);
+  } catch (err) {
+    reportFsError(`Failed to remove token ${TOKEN_PATH}`, err);
+  }
+
   process.exit(0);
 }
 
@@ -208,5 +231,9 @@ const server = net.createServer((socket) => {
 
 server.listen(SOCKET_PATH, () => {
   log(`Listening on ${SOCKET_PATH}`);
-  try { fs.chmodSync(SOCKET_PATH, 0o600); } catch {}
+  try {
+    fs.chmodSync(SOCKET_PATH, 0o600);
+  } catch (err) {
+    reportFsError(`Failed to chmod socket ${SOCKET_PATH}`, err);
+  }
 });

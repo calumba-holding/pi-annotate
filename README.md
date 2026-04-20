@@ -7,7 +7,7 @@
 **Visual annotation for AI. Click elements, capture screenshots, fix code.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-macOS-blue?style=for-the-badge)]()
+[![Browser](https://img.shields.io/badge/Browser-Chrome%20%7C%20Chromium-blue?style=for-the-badge)]()
 
 ```
 /annotate
@@ -29,9 +29,9 @@ pi install npm:pi-annotate
 
 Restart pi to load the extension.
 
-### 2. Load Chrome Extension
+### 2. Load Supported Browser Extension
 
-1. Open `chrome://extensions`, enable **Developer mode**
+1. Open the extensions page in Google Chrome, Google Chrome for Testing, or Chromium, and enable **Developer mode**
 2. Click **Load unpacked** → select the `chrome-extension/` folder inside the installed package
 3. Click the **Pi Annotate icon** in the toolbar
 
@@ -43,12 +43,12 @@ The popup shows your extension ID. Click **Copy** next to the install command, t
 ./install.sh <extension-id>
 ```
 
-Restart Chrome. The popup will show **Connected** when ready.
+This installs the native messaging manifest for Google Chrome, Google Chrome for Testing, and Chromium on macOS, plus the default/current config-home locations for those browsers on Linux. Fully quit and reopen that browser. The popup will show **Connected** when ready.
 
 ## Usage
 
 ```bash
-/annotate                  # Current Chrome tab
+/annotate                  # Current browser tab
 /annotate https://x.com    # Opens URL first
 ```
 
@@ -140,8 +140,8 @@ Debug mode adds computed styles, parent context, and CSS variables per element. 
 Pi Extension (index.ts)
     ↕ Unix Socket (/tmp/pi-annotate.sock)
 Native Host (host.cjs)
-    ↕ Chrome Native Messaging
-Chrome Extension (background.js → content.js)
+    ↕ Browser Native Messaging
+Browser Extension (background.js → content.js)
 ```
 
 | File | Purpose |
@@ -171,11 +171,20 @@ tail -f /tmp/pi-annotate-host.log                    # Native host logs
 |-------|-----|
 | UI doesn't appear | Refresh page, check service worker console |
 | "restricted URL" error | Provide a URL: `/annotate https://example.com` |
-| Native host not connecting | Click extension icon → check status, re-run install |
+| Native host not connecting | Click extension icon → check status, re-run install, fully restart the supported browser |
 | "Extension ID mismatch" | Copy install command from popup, re-run |
 | Socket errors | `ls -la /tmp/pi-annotate.sock` |
 
-**Verify native host:** `cat ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.pi.annotate.json`
+**Verify native host:**
+- macOS Google Chrome: `cat ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.pi.annotate.json`
+- macOS Google Chrome for Testing: `cat ~/Library/Application\ Support/Google/ChromeForTesting/NativeMessagingHosts/com.pi.annotate.json`
+- macOS Chromium: `cat ~/Library/Application\ Support/Chromium/NativeMessagingHosts/com.pi.annotate.json`
+- Linux Google Chrome (default path): `cat ~/.config/google-chrome/NativeMessagingHosts/com.pi.annotate.json`
+- Linux Google Chrome for Testing (default path): `cat ~/.config/google-chrome-for-testing/NativeMessagingHosts/com.pi.annotate.json`
+- Linux Chromium (default path): `cat ~/.config/chromium/NativeMessagingHosts/com.pi.annotate.json`
+- Linux with custom config home: `echo "${CHROME_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}"`
+
+If your Linux browser uses a different XDG config root, export `CHROME_CONFIG_HOME` or `XDG_CONFIG_HOME` before running `./install.sh <extension-id>`. Custom `--user-data-dir` layouts are not handled by this installer.
 
 ## License
 
