@@ -2,6 +2,13 @@
 
 All notable changes to Pi Annotate.
 
+## [Unreleased]
+
+## [0.4.3] - 2026-04-22
+
+### Fixed
+- Migrated extension tool schemas from `@sinclair/typebox` to `typebox` 1.x so packaged installs follow Pi's current extension runtime contract.
+
 ## [0.4.2] - 2026-04-20
 
 ### Fixed
